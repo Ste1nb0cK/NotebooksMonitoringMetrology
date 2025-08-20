@@ -1,0 +1,37 @@
+NCHANNELS0 = 1
+NLEVELS = 2
+# OMEGA = 1.0 # NOTE: THESE ARE GAMMELMARK PARAMETERS
+# GAMMA = 0.5
+ OMEGA = 10.0 # NOTE: THESE ARE GAMMELMARK PARAMETERS
+ GAMMA = 1.0
+ DELTA = 0.0
+
+# tffactor =  10.5
+tffactor =  10.5
+
+ntimes = 200
+
+delta = 0.0
+# deltamin = 0.0
+# deltamax = 1.0
+alphamin = 0.0
+alphamax = 100.5
+
+ntraj = 1_000_000
+seed = 1
+
+psi0g_re = 0.0
+psi0g_im = 0.0
+psi0e_re = 1.0
+psi0e_im = 0.0
+
+#Unravelings
+#
+# T = reshape([1.0 + 0.0im], 1, 1)
+nworkers = 4
+ndeltas = 50
+nalphas = 1
+tolerance = 0.03
+
+
+
