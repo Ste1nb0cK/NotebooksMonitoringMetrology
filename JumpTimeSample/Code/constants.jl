@@ -47,3 +47,9 @@ const nworkers = try
 catch
         cfg["nworkers"]
 end
+
+const pauli_basis = [I(2), util.sigma_x, util.sigma_y, util.sigma_z]
+const cfield = 0.0 + 0.0im
+const alpha = [cfield]
+
+

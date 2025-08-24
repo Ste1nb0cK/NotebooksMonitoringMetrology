@@ -1,11 +1,3 @@
-
-function obtain_ensol(L0, H0, delta, T, alpha, Ls, params, tspan, e_ops, tlist)
-        Ls_par, H_par, He_par = mo.obtain_parametric_unraveling_operators(L0, H0, T, alpha, NLEVELS)
-        sys = cs.System(H_par(delta), Ls, NLEVELS, nchannels)
-        return mc.get_sol_jumps(sys, params, tspan, e_ops, tlist;
-                save_on=false, save_start=false, save_end=false)
-end
-
 function get_lindbladsol(delta, tspan, u0; saveat)
         function rf_ode!(dr, r, p, t)
                 dr[1] = -delta * r[2] - 0.5 * GAMMA * r[1]
@@ -14,80 +6,6 @@ function get_lindbladsol(delta, tspan, u0; saveat)
         end
         prob = ODEProblem(rf_ode!, u0, tspan; saveat=tlist)
         return solve(prob)
-end
-
-function check_convergencetolindblad(delta, tspan, u0, sol_lindblad, sim, tlist, tolerance)
-        r_mean = mo.average_expvals(sim)
-        belowtolerance = true
-        ntimes = length(tlist)
-        # r_lindblad = sol_lindblad.u
-        for k in 1:ntimes
-                # difference_x = 0.5 * (r_lindblad[1] - r_mean[1, k])
-                # difference_y = 0.5 * (r_lindblad[2] - r_mean[2, k])
-                # difference_z = 0.5 * (r_lindblad[3] - r_mean[3, k])
-                difference = 0.5 * ((sol_lindblad.u[k][1] - r_mean[1, k]) * e_ops[1] +
-                                    (sol_lindblad.u[k][2] - r_mean[2, k]) * e_ops[2] +
-                                    (sol_lindblad.u[k][3] - r_mean[3, k]) * e_ops[3])
-
-                trace_distance = abs(0.5 * tr(sqrt(adjoint(difference) * difference)))
-                if trace_distance > tolerance
-                        return !belowtolerance
-                end
-        end
-        return belowtolerance
-end
-
-function extractfisample!(fisample, sim)
-        ntraj = length(fisample)
-        for k in 1:ntraj
-                normalize!(sim[k].u[end])
-                fisample[k] = (2 * real(dot(sim[k].u[end],
-                        sim[k].prob.kwargs[:callback].continuous_callbacks[1].affect!.cache_phi)))^2
-        end
-end
-
-
-function extracttimessample!(tsample, sim)
-        ntraj = size(tsample)
-        for k in 1:ntraj
-                normalize!(sim[k].u[end])
-                fisample[k] = (2 * real(dot(sim[k].u[end],
-                        sim[k].prob.kwargs[:callback].continuous_callbacks[1].affect!.cache_phi)))^2
-        end
-end
-
-
-
-function generate_checkedsamples!(samplefi, sampleexpvals,
-        u0, L0, H0, delta, ddelta, T, alpha, Ls, dLs, params, tspan, e_ops, tlist, tolerance)
-        sim = obtain_ensol(L0, H0, delta, ddelta, T, alpha, Ls, dLs, params, tspan, e_ops, tlist)
-        # sol_lindblad = get_lindbladsol(delta, tspan, u0; saveat=tlist)
-        # convergence_flag = check_convergencetolindblad(delta, tspan, u0, sol_lindblad, sim, tlist, tolerance)
-        # if !convergence_flag
-        #         @warn "Tolerance surpassed with delta=$delta, alpha=$alpha"
-        # end
-        extractexpvalsample!(sampleexpvals, sim)
-        extractfisample!(samplefi, sim)
-end
-# (L0, H0, delta, ddelta, T, alpha, Ls, dLs, params, tspan, e_ops, tlist)
-
-function generate_samples!(samplefi, sampleexpvals,
-        L0, H0, delta, ddelta, T, alpha, Ls, dLs, params, tspan, e_ops, tlist)
-        sim = obtain_ensol(L0, H0, delta, ddelta, T, alpha, Ls, dLs, params, tspan, e_ops, tlist)
-        extractexpvalsample!(sampleexpvals, sim)
-        extractfisample!(samplefi, sim)
-end
-
-
-function extractexpvalsample!(sampleexpvals, sim)
-        nops, ntimes, ntraj = size(sampleexpvals)
-        for k in 1:ntraj
-                for j in 1:ntimes
-                        for i in 1:nops
-                                sampleexpvals[i, j, k] = sim[k].prob.kwargs[:callback].discrete_callbacks[1].affect!.func.expvals[i, j]
-                        end
-                end
-        end
 end
 
 function obtain_ensol(L0, H0, delta, T, alpha, params, tspan, e_ops, tlist)
@@ -114,5 +32,88 @@ macro timeerr(ex)
                         "alloc: ", Base.format_bytes(allocd))
 
                 v
+        end
+end
+
+function get_a(theta)
+        Htilde = H0(theta) - 1.0im * conj(cfield) * L0(theta) - 0.5im * adjoint(L0(theta)) * L0(theta)
+        a = [tr(pauli_basis[k] * Htilde) / tr(pauli_basis[k]^2) for k in 1:4]
+        return a[1], a[2], a[3], a[4]
+end
+
+
+function get_Heffexponential(theta, tau)
+        a0, a1, a2, a3 = get_a(theta)
+        xi = sqrt(a1^2 + a2^2 + a3^2)
+        dotproduct = a1 * util.sigma_x + a2 * util.sigma_y + a3 * util.sigma_z
+        return exp(-1.0im * a0 * tau) * (cos(tau * xi) * I(2) - 1.0im * dotproduct / xi * sin(tau * xi)) #the alpha factor may be ommited by normalization
+end
+
+function get_Heffexponential!(cache, theta, tau)
+        a0, a1, a2, a3 = get_a(theta)
+        xi = sqrt(a1^2 + a2^2 + a3^2)
+        cache .= exp(-1.0im * a0 * tau) * (cos(tau * xi) * I(2) - 1.0im * (a1 * util.sigma_x +
+                                                                           a2 * util.sigma_y + a3 * util.sigma_z) / xi * sin(tau * xi)) #the alpha factor may be ommited by normalization
+end
+
+function monitoringstep!(cache_exp, cache_dexp, L, dL, cache_state, psi, cache_aux1, cache_aux2, cache_phi)
+        mul!(psi, cache_exp, cache_state)  # This is exp(-i\tau H_e)\psi_n
+        ####### PHI UPDATE without rescaling
+        # Obtain  \partial_\theta exp(-i\tau*H_eff(\theta))*\psi , store in aux1
+        mul!(cache_aux1, cache_dexp, cache_state)
+        # Obtain \partial_\theta exp(-i\tau*H_eff(\theta))*\psi + exp(-i\tau*H_eff(theta))*\phi, store where the derivative was
+        mul!(cache_aux1, cache_exp, cache_phi, 1.0, 1.0)
+        # Multiply by the jump operator and store in phi_cache
+        mul!(cache_phi, L, cache_aux1)
+        # Prepare the last term
+        mul!(cache_aux2, dL, psi)
+        # Now put everything together and store in cache_phi
+        cache_phi .+= cache_aux2
+        ###### STATE UPDATE without normalization
+        mul!(cache_state, L, psi)
+        ##### NORMALIZATION
+        # Normalize phi
+        normalization = norm(cache_state)
+        lmul!(1 / normalization, cache_phi)
+        # Normalize the after jump state
+        lmul!(1 / normalization, cache_state)
+end
+
+function finalmonitoringstep!(cache_exp, cache_dexp, cache_state, psi, cache_aux1, cache_aux2, cache_phi)
+        mul!(psi, cache_exp, cache_state)
+        mul!(cache_aux1, cache_dexp, cache_state)
+        mul!(cache_aux2, cache_exp, cache_phi)
+        cache_phi .= cache_aux1 + cache_aux2
+        lmul!(1 / norm(psi), cache_phi)
+        normalize!(psi)
+end
+
+
+function psiphi_finaltime!(sol, L, dL, cache_exp, cache_dexp, cache_aux1, cache_aux2, psi, cache_state, cache_phi, delta)
+        jumptimes = sol.prob.kwargs[:callback].continuous_callbacks[1].affect!.jump_times
+        njumps = sol.prob.kwargs[:callback].continuous_callbacks[1].affect!.jump_counter[] - 1
+        if njumps == 0
+                tau = tf
+                get_Heffexponential!(cache_exp, delta, tau)
+                ForwardDiff.derivative!(cache_dexp, theta -> get_Heffexponential(theta, tau), delta)
+                finalmonitoringstep!(cache_exp, cache_dexp, cache_state, psi, cache_aux1, cache_aux2, cache_phi)
+        else
+                tau = jumptimes[1]
+                get_Heffexponential!(cache_exp, delta, tau)
+                ForwardDiff.derivative!(cache_dexp, theta -> get_Heffexponential(theta, tau), delta)
+                monitoringstep!(cache_exp, cache_dexp, L, dL, cache_state, psi, cache_aux1, cache_aux2, cache_phi)
+                if njumps > 1
+                        for k in 2:njumps
+                                tau = jumptimes[k] - jumptimes[k-1]
+                                get_Heffexponential!(cache_exp, delta, tau)
+                                ForwardDiff.derivative!(cache_dexp, theta -> get_Heffexponential(theta, tau), delta)
+                                monitoringstep!(cache_exp, cache_dexp, L, dL, cache_state, psi, cache_aux1, cache_aux2, cache_phi)
+                        end
+                end
+
+                tau = tf - jumptimes[end]
+                get_Heffexponential!(cache_exp, delta, tau)
+                ForwardDiff.derivative!(cache_dexp, theta -> get_Heffexponential(theta, tau), delta)
+                finalmonitoringstep!(cache_exp, cache_dexp, cache_state, psi, cache_aux1, cache_aux2, cache_phi)
         end
 end
